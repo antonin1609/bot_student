@@ -262,10 +262,12 @@ if user_question:
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.history.append({"role": "assistant", "content": answer})
 
-if st.session_state.last_answer:
+if st.session_state.last_answer is not None:
+    answer_text = str(st.session_state.last_answer)
+
     st.download_button(
-        "⬇️ Télécharger la dernière réponse",
-        data=st.session_state.last_answer,
+        label="⬇️ Télécharger la dernière réponse",
+        data=answer_text,
         file_name="reponse_assistant_etudiant.txt",
         mime="text/plain"
     )
