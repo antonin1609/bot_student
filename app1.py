@@ -1,4 +1,5 @@
 import os
+import base64
 import streamlit as st
 
 from rag_utils import (
@@ -29,6 +30,12 @@ st.markdown("""
     margin-bottom: 18px;
 }
 .small-note {opacity: 0.9; font-size: 0.95rem;}
+.section-box {
+    border: 1px solid rgba(120,120,120,0.2);
+    border-radius: 14px;
+    padding: 14px;
+    margin-bottom: 12px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -50,9 +57,38 @@ def file_signature(files):
         return None
     return tuple((f.name, getattr(f, "size", None)) for f in files)
 
+def encode_image(uploaded_file):
+    return base64.b64encode(uploaded_file.getvalue()).decode("utf-8")
+
+def analyze_image_with_groq(api_key, uploaded_file, prompt):
+    from groq import Groq
+    client = Groq(api_key=api_key)
+    encoded_image = encode_image(uploaded_file)
+    image_type = uploaded_file.type or "image/png"
+    response = client.chat.completions.create(
+        model="meta-llama/llama-4-scout-17b-16e-instruct",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{image_type};base64,{encoded_image}"
+                        }
+                    }
+                ]
+            }
+        ],
+        temperature=0.2,
+        max_completion_tokens=1200
+    )
+    return response.choices[0].message.content.strip()
+
 with st.sidebar:
     st.markdown("## 🎓 Assistant Étudiant IA")
-    st.markdown("Une IA pour plusieurs PDF, avec résumé, explication, questions et fiche de révision.")
+    st.markdown("PDF + vision + réponses structurées.")
     st.divider()
 
     uploaded_files = st.file_uploader(
@@ -61,9 +97,15 @@ with st.sidebar:
         accept_multiple_files=True
     )
 
+    uploaded_image = st.file_uploader(
+        "🖼️ Charge une image",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=False
+    )
+
     mode = st.radio(
         "Mode d'assistance",
-        ["Question libre", "Résumé", "Questions d'examen", "Explication", "Fiche de révision"],
+        ["Question libre", "Résumé", "Questions d'examen", "Explication", "Fiche de révision", "Vision image"],
         index=0
     )
 
@@ -71,7 +113,7 @@ with st.sidebar:
     temperature = st.slider("Créativité", 0.0, 1.0, 0.2, 0.05)
     st.divider()
 
-    if uploaded_files:
+    if uploaded_files and mode != "Vision image":
         file_options = ["Tous les documents"] + [f.name for f in uploaded_files]
         current = st.session_state.selected_source if st.session_state.selected_source in file_options else "Tous les documents"
         st.session_state.selected_source = st.selectbox(
@@ -81,7 +123,6 @@ with st.sidebar:
         )
 
     st.divider()
-
     col1, col2 = st.columns(2)
     with col1:
         index_button = st.button("⚙️ Indexer")
@@ -102,9 +143,38 @@ with st.sidebar:
 st.markdown("""
 <div class="title-box">
     <h2 style="margin:0;">🎓 Assistant Étudiant IA</h2>
-    <p class="small-note" style="margin:0;">Réponses structurées, sources, streaming, et prise en charge de plusieurs PDF.</p>
+    <p class="small-note" style="margin:0;">Réponses structurées, sources, streaming, PDF multiples et vision.</p>
 </div>
 """, unsafe_allow_html=True)
+
+api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY"))
+if not api_key:
+    st.warning("Ajoute la clé GROQ_API_KEY dans les secrets.")
+    
+if mode == "Vision image":
+    st.markdown("### Analyse d'image")
+    if uploaded_image:
+        st.image(uploaded_image, caption=uploaded_image.name, use_container_width=True)
+        vision_prompt = st.text_input(
+            "Prompt pour l'image",
+            value="Décris cette image clairement pour un étudiant, en donnant les éléments importants."
+        )
+        if st.button("Analyser l'image"):
+            if not api_key:
+                st.error("Clé GROQ_API_KEY manquante.")
+                st.stop()
+            with st.spinner("Analyse de l'image en cours..."):
+                result = analyze_image_with_groq(api_key, uploaded_image, vision_prompt)
+            st.markdown(result)
+            st.download_button(
+                "⬇️ Télécharger l'analyse",
+                data=result,
+                file_name="analyse_image.txt",
+                mime="text/plain"
+            )
+    else:
+        st.info("Charge une image pour lancer le mode vision.")
+    st.stop()
 
 if not uploaded_files:
     st.info("Charge tes PDF dans la barre latérale pour commencer.")
@@ -168,7 +238,6 @@ if user_question:
             context = format_context(results)
             sources = format_sources(results)
 
-        api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY"))
         if not api_key:
             st.error("Clé GROQ_API_KEY manquante.")
             st.stop()
