@@ -2,6 +2,5 @@ streamlit
 groq
 pypdf
 sentence-transformers
-faiss-cpu
 numpy
 pandas
