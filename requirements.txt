@@ -4,3 +4,4 @@ pypdf
 sentence-transformers
 numpy
 pandas
+pillow
