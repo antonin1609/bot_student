@@ -86,6 +86,13 @@ def analyze_image_with_groq(api_key, uploaded_file, prompt):
     )
     return response.choices[0].message.content.strip()
 
+def parse_groq_stream(stream):
+    for chunk in stream:
+        if chunk.choices:
+            delta = chunk.choices[0].delta
+            if delta and delta.content is not None:
+                yield delta.content
+
 with st.sidebar:
     st.markdown("## 🎓 Assistant Étudiant IA")
     st.markdown("PDF + vision + réponses structurées.")
@@ -150,7 +157,7 @@ st.markdown("""
 api_key = st.secrets.get("GROQ_API_KEY", os.environ.get("GROQ_API_KEY"))
 if not api_key:
     st.warning("Ajoute la clé GROQ_API_KEY dans les secrets.")
-    
+
 if mode == "Vision image":
     st.markdown("### Analyse d'image")
     if uploaded_image:
@@ -167,8 +174,8 @@ if mode == "Vision image":
                 result = analyze_image_with_groq(api_key, uploaded_image, vision_prompt)
             st.markdown(result)
             st.download_button(
-                "⬇️ Télécharger l'analyse",
-                data=result,
+                label="⬇️ Télécharger l'analyse",
+                data=str(result),
                 file_name="analyse_image.txt",
                 mime="text/plain"
             )
@@ -253,7 +260,8 @@ if user_question:
             max_completion_tokens=2000
         )
 
-        answer = st.write_stream(stream)
+        answer = st.write_stream(parse_groq_stream(stream))
+        answer = "" if answer is None else str(answer)
         st.session_state.last_answer = answer
 
         if sources:
@@ -262,12 +270,10 @@ if user_question:
     st.session_state.messages.append({"role": "assistant", "content": answer})
     st.session_state.history.append({"role": "assistant", "content": answer})
 
-if st.session_state.last_answer is not None:
-    answer_text = str(st.session_state.last_answer)
-
+if st.session_state.last_answer:
     st.download_button(
         label="⬇️ Télécharger la dernière réponse",
-        data=answer_text,
+        data=str(st.session_state.last_answer),
         file_name="reponse_assistant_etudiant.txt",
         mime="text/plain"
     )
