@@ -2,8 +2,12 @@ import os
 import streamlit as st
 
 from rag_utils import (
-    get_embedder, build_documents, create_faiss_index,
-    retrieve, format_context, format_sources
+    get_embedder,
+    build_documents,
+    create_embeddings,
+    retrieve,
+    format_context,
+    format_sources,
 )
 from llm_utils import get_client, stream_answer
 
@@ -32,7 +36,7 @@ for key, default in {
     "messages": [],
     "history": [],
     "docs": None,
-    "index": None,
+    "embeddings": None,
     "embedder": None,
     "indexed_signature": None,
     "last_answer": "",
@@ -69,13 +73,15 @@ with st.sidebar:
 
     if uploaded_files:
         file_options = ["Tous les documents"] + [f.name for f in uploaded_files]
+        current = st.session_state.selected_source if st.session_state.selected_source in file_options else "Tous les documents"
         st.session_state.selected_source = st.selectbox(
             "Limiter à un document",
             file_options,
-            index=file_options.index(st.session_state.selected_source) if st.session_state.selected_source in file_options else 0
+            index=file_options.index(current)
         )
 
     st.divider()
+
     col1, col2 = st.columns(2)
     with col1:
         index_button = st.button("⚙️ Indexer")
@@ -83,8 +89,13 @@ with st.sidebar:
         reset_button = st.button("🗑️ Reset")
 
     if reset_button:
-        for key in ["messages", "history", "docs", "index", "embedder", "indexed_signature", "last_answer"]:
-            st.session_state[key] = [] if key in ["messages", "history"] else None
+        st.session_state.messages = []
+        st.session_state.history = []
+        st.session_state.docs = None
+        st.session_state.embeddings = None
+        st.session_state.embedder = None
+        st.session_state.indexed_signature = None
+        st.session_state.last_answer = ""
         st.session_state.selected_source = "Tous les documents"
         st.rerun()
 
@@ -101,18 +112,25 @@ if not uploaded_files:
 
 sig = file_signature(uploaded_files)
 
-if index_button or st.session_state.index is None or st.session_state.indexed_signature != sig:
+if index_button or st.session_state.embeddings is None or st.session_state.indexed_signature != sig:
     prog = st.progress(0.0, text="Préparation des documents...")
+
     def prog_cb(v):
         prog.progress(min(1.0, max(0.0, float(v))), text="Indexation en cours...")
+
     with st.spinner("Lecture, découpage et indexation des PDF..."):
         st.session_state.embedder = get_embedder()
         st.session_state.docs = build_documents(uploaded_files, progress_callback=prog_cb)
         if not st.session_state.docs:
             st.error("Aucun texte exploitable trouvé dans les PDF.")
             st.stop()
-        st.session_state.index = create_faiss_index(st.session_state.docs, st.session_state.embedder, progress_callback=prog_cb)
+        st.session_state.embeddings = create_embeddings(
+            st.session_state.docs,
+            st.session_state.embedder,
+            progress_callback=prog_cb
+        )
         st.session_state.indexed_signature = sig
+
     prog.empty()
     st.success(f"{len(st.session_state.docs)} extraits indexés.")
 
@@ -142,7 +160,7 @@ if user_question:
             results = retrieve(
                 user_question,
                 st.session_state.docs,
-                st.session_state.index,
+                st.session_state.embeddings,
                 st.session_state.embedder,
                 top_k=top_k,
                 source_filter=st.session_state.selected_source
