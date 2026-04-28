@@ -1,5 +1,5 @@
 from pypdf import PdfReader
-import faiss
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -52,53 +52,47 @@ def build_documents(uploaded_files, progress_callback=None):
         progress_callback(1.0)
     return docs
 
-def create_faiss_index(docs, embedder=None, progress_callback=None):
+def create_embeddings(docs, embedder=None, progress_callback=None):
     if embedder is None:
         embedder = get_embedder()
     texts = [d["text"] for d in docs]
     total = max(1, len(texts))
-    embeddings_list = []
+    batches = []
     batch_size = 32
     for start in range(0, len(texts), batch_size):
         batch = texts[start:start + batch_size]
         emb = embedder.encode(batch, convert_to_numpy=True, normalize_embeddings=True)
-        embeddings_list.append(emb)
+        batches.append(emb)
         if progress_callback:
             progress_callback(min(1.0, (start + len(batch)) / total))
-    embeddings = __import__("numpy").vstack(embeddings_list).astype("float32")
-    index = faiss.IndexFlatIP(embeddings.shape[1])
-    index.add(embeddings)
-    if progress_callback:
-        progress_callback(1.0)
-    return index
+    if batches:
+        return np.vstack(batches).astype("float32")
+    return np.empty((0, 384), dtype="float32")
 
-def retrieve(question, docs, index, embedder=None, top_k=5, source_filter=None):
+def retrieve(question, docs, embeddings, embedder=None, top_k=5, source_filter=None):
     if embedder is None:
         embedder = get_embedder()
-    if source_filter and source_filter != "Tous les documents":
-        filtered = [(i, d) for i, d in enumerate(docs) if d["source"] == source_filter]
-        if not filtered:
-            return []
-        filtered_ids = [i for i, _ in filtered]
-        filtered_docs = [d for _, d in filtered]
-        texts = [d["text"] for d in filtered_docs]
-        temp_index = faiss.IndexFlatIP(index.d)
-        emb = embedder.encode(texts, convert_to_numpy=True, normalize_embeddings=True).astype("float32")
-        temp_index.add(emb)
-        q_emb = embedder.encode([question], convert_to_numpy=True, normalize_embeddings=True).astype("float32")
-        _, ids = temp_index.search(q_emb, top_k)
-        results = []
-        for idx in ids[0]:
-            if idx != -1:
-                results.append(filtered_docs[idx])
-        return results
 
-    q_emb = embedder.encode([question], convert_to_numpy=True, normalize_embeddings=True).astype("float32")
-    _, ids = index.search(q_emb, top_k)
+    if len(docs) == 0 or embeddings.shape[0] == 0:
+        return []
+
+    if source_filter and source_filter != "Tous les documents":
+        filtered_idx = [i for i, d in enumerate(docs) if d["source"] == source_filter]
+        if not filtered_idx:
+            return []
+        docs_f = [docs[i] for i in filtered_idx]
+        emb_f = embeddings[filtered_idx]
+    else:
+        docs_f = docs
+        emb_f = embeddings
+
+    q_emb = embedder.encode([question], convert_to_numpy=True, normalize_embeddings=True).astype("float32")[0]
+    scores = emb_f @ q_emb
+    top_idx = np.argsort(-scores)[:top_k]
+
     results = []
-    for idx in ids[0]:
-        if idx != -1:
-            results.append(docs[idx])
+    for idx in top_idx:
+        results.append(docs_f[idx])
     return results
 
 def format_context(results):
